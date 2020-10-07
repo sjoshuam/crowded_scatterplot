@@ -29,6 +29,54 @@ match_index <- match_index[match(nominate_scores$party_code, match_index)]
 nominate_scores$party_code <- names(match_index)
 remove(match_index)
 
+##########========== CREATE FUNCTIONS
+
+#####===== Function to suggest number of centers for kmeans()
+
+CenterDiagnostic <- function(xy_coords, good_enough= 0.9, max_centers= 16) {
+
+## Define values to try
+xy_centers <- 4:min(max_centers, nrow(xy_coords))
+
+## Try kmeans() for each test value and record the results
+KMeans <- function(cent, xy) {
+	y <- kmeans(x= xy, centers= cent)
+	return(y$betweenss/y$totss)
+  }
+
+## 
+use_cores <- floor(parallel::detectCores() * 0.8)
+use_cores <- parallel::makeCluster(use_cores)
+center_tests <- parallel::parLapply(
+	cl= use_cores,
+	fun= KMeans,
+	X= xy_centers,
+	xy= xy_coords
+	)
+parallel::stopCluster(use_cores)
+remove(use_cores)
+
+## Package results for analysis
+center_tests <- data.frame(
+	"Centers"= xy_centers,
+	"Score"= unlist(center_tests)
+  )
+
+## Determine a good choice for centers argument of kmeans()
+if(max(center_tests$Score) > good_enough) {
+  threshold <- min( which(center_tests$Score > good_enough))
+  } else {
+    threshold <- which.max(center_tests$Scores)
+    }
+  center_tests$Centers[threshold]
+
+}
+
+##########========== DEMONSTRATE FUNCTION
+
+num_centers <- CenterDiagnostic(
+  nominate_scores[, c("nominate_dim1", "nominate_dim2")])
+
 ##########========== FOOTER
 
 ## Run time
