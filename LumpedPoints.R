@@ -37,7 +37,7 @@ nominate_scores$Y <- nominate_scores$nominate_dim2
 
 #####===== Function to suggest number of centers for kmeans()
 
-CenterDiagnostic <- function(xy_coords, good_enough= 0.9, max_centers= 16) {
+CenterDiagnostic <- function (xy_coords, good_enough= 0.95, max_centers= 16) {
 
   ## Define values to try
   xy_centers <- 4:min(max_centers, nrow(xy_coords))
@@ -70,7 +70,7 @@ CenterDiagnostic <- function(xy_coords, good_enough= 0.9, max_centers= 16) {
   if(max(center_tests$Score) > good_enough) {
     threshold <- min( which(center_tests$Score > good_enough))
     } else {
-      threshold <- which.max(center_tests$Scores)
+      threshold <- min( which(center_tests$Scores == max(center_tests$Scores)))
     }
 
     ## Express output
@@ -79,7 +79,7 @@ CenterDiagnostic <- function(xy_coords, good_enough= 0.9, max_centers= 16) {
 
 ####==== Function to simplify data by kmeans() clusters
 
-Simplify2Centers <- function(xy_coords, num_centers= CenterDiagnostic) {
+Simplify2Centers <- function (xy_coords, num_centers= CenterDiagnostic) {
 
   ## Determine number of centers
   if(class(num_centers) == "function") {num_centers <- num_centers(xy_coords)}
@@ -87,6 +87,7 @@ Simplify2Centers <- function(xy_coords, num_centers= CenterDiagnostic) {
   ## Create a dataset of clusters
   xy_kmeans <- kmeans(xy_coords, centers= num_centers, iter.max= 1000L)
   xy_centers <- as.data.frame(xy_kmeans$centers)
+  colnames(xy_centers) <- c("X", "Y")
 
   ## Add information to xy_centers objects
   xy_centers$num_nodes <- xy_kmeans$size
@@ -95,16 +96,70 @@ Simplify2Centers <- function(xy_coords, num_centers= CenterDiagnostic) {
     INDEX= xy_kmeans$cluster,
     FUN= identity
     )
+  attr(xy_centers, "CenterLabels") <- xy_kmeans$cluster
 
   ## Express output
   return(xy_centers)
   }
 
-####==== Render 
+####==== Render original and clustered plots side-by-side
+
+ComparePlots <- function (before, after, tune_size= 1.4,
+	plot_file= file.path("C_Outputs", "LumpedCluster.pdf")) {
+  #####===== Prepare for rendition
+  ## Initialize graphical device 
+  pdf( plot_file, width= 10, height= 5)
+  par(mfrow= c(1, 2), font= 2)
+  
+  ## Determine scaling factor for cluster plot
+  cluster_scale <- after$num_nodes / min(after$num_nodes)
+  cluster_scale <- log(cluster_scale + 2, base= 2) * tune_size
+  
+  #####===== Render the original scatter plot
+  plot(x= before[, 1:2],
+  	xaxt= "n", yaxt= "n", xlab= "", ylab= "", bty= "n", pch= 16,
+  	xlim= range(before[, 1]), ylim= range(before[, 2])
+  	)
+  axis(side= 1, col.ticks= "black", col= "transparent" )
+  axis(side= 2, col.ticks= "black", col= "transparent" )
+  title(main= "Original Scatter Plot")
+  
+  #####===== Render the clustered plot
+  ## Render original scatter as faded underlay
+  plot(x= before[, 1:2], col= "gray90",
+  	xaxt= "n", yaxt= "n", xlab= "", ylab= "", bty= "n", pch= 16,
+  	xlim= range(before[, 1]), ylim= range(before[, 2])
+  	)
+  axis(side= 1, col.ticks= "black", col= "transparent" )
+  axis(side= 2, col.ticks= "black", col= "transparent" )
+  title(main= "Clustered Scatter Plot")
+  
+  ## Render clusters
+  points(x= after[,  c("X", "Y")], cex= cluster_scale, pch= 16)
+  
+  ## Label clusters with number of points
+  rect(
+  	ybottom= after$Y - strheight(after$num_nodes) * 0.5,
+  	ytop= after$Y + strheight(after$num_nodes) * 0.5,
+  	xleft= after$X - strwidth(after$num_nodes) * 0.5,
+  	xright= after$X + strwidth(after$num_nodes) * 0.5,
+  	col= "black"
+    )
+  text(x= after[,  c("X", "Y")],labels= after$num_nodes, col= "white")
+  
+  #####===== Terminate graphical device
+  graphics.off()
+
+  }
 
 ##########========== DEMONSTRATE FUNCTION
+
+## Generate data on k-means clusters
 xy_centers <- Simplify2Centers(nominate_scores[, c("X", "Y")])
-objects()
+nominate_scores$CenterLabels <- attr(xy_centers, "CenterLabels")
+
+## Plot original and clustered plot side by side
+ComparePlots(before= nominate_scores[, c("X", "Y")], after= xy_centers)
 
 ##########========== FOOTER
 
