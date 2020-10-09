@@ -65,6 +65,7 @@ CenterDiagnostic <- function (xy_coords, good_enough= 0.95, max_centers= 16) {
     "Centers"= xy_centers,
     "Score"= unlist(center_tests)
     )
+  center_tests$Score[ is.na(center_tests$Score)] <- 0
 
   ## Determine a good choice for centers argument of kmeans()
   if(max(center_tests$Score) > good_enough) {
@@ -104,8 +105,12 @@ Simplify2Centers <- function (xy_coords, num_centers= CenterDiagnostic) {
 
 ####==== Render original and clustered plots side-by-side
 
-ComparePlots <- function (before, after, tune_size= 1.4,
-	plot_file= file.path("C_Outputs", "LumpedCluster.pdf")) {
+ComparePlots <- function (
+	before, after,
+	tune_size= 1.4,
+	before.col= NULL, after.col= NULL,
+	plot_file= file.path("C_Outputs", "LumpedCluster.pdf")
+	) {
   #####===== Prepare for rendition
   ## Initialize graphical device 
   pdf( plot_file, width= 10, height= 5)
@@ -126,7 +131,7 @@ ComparePlots <- function (before, after, tune_size= 1.4,
   
   #####===== Render the clustered plot
   ## Render original scatter as faded underlay
-  plot(x= before[, 1:2], col= "gray90",
+  plot(x= before[, 1:2], col= before.col,
   	xaxt= "n", yaxt= "n", xlab= "", ylab= "", bty= "n", pch= 16,
   	xlim= range(before[, 1]), ylim= range(before[, 2])
   	)
@@ -145,21 +150,46 @@ ComparePlots <- function (before, after, tune_size= 1.4,
   	xright= after$X + strwidth(after$num_nodes) * 0.5,
   	col= "black"
     )
-  text(x= after[,  c("X", "Y")],labels= after$num_nodes, col= "white")
+  text(x= after[,  c("X", "Y")],labels= after$num_nodes, col= after.col)
   
   #####===== Terminate graphical device
   graphics.off()
 
-  }
+}
+
+#####===== Generate perceptually even color scheme
+ColorScheme <- function (num_colors, s= 0.1, v= 0.9) {
+	
+	## Use HCL color system to generate perceptually spaced hues
+	color_scheme <- 1 - {1 / num_colors}
+	color_scheme <- seq(from= 0, to= color_scheme * 360, length.out= num_colors)
+	color_scheme <- rgb2hsv( col2rgb( hcl(h= color_scheme)))["h", ]
+	
+	## Use HSV color system to generate colors
+	color_scheme <- hsv(h= color_scheme, s= s, v= v)
+
+	## express results	
+	return(color_scheme)
+	}
 
 ##########========== DEMONSTRATE FUNCTION
 
 ## Generate data on k-means clusters
+set.seed(817)
 xy_centers <- Simplify2Centers(nominate_scores[, c("X", "Y")])
 nominate_scores$CenterLabels <- attr(xy_centers, "CenterLabels")
 
+## Generate color scheme
+color_scheme <- ColorScheme( nrow(xy_centers))
+
+
 ## Plot original and clustered plot side by side
-ComparePlots(before= nominate_scores[, c("X", "Y")], after= xy_centers)
+ComparePlots(
+	before= nominate_scores[, c("X", "Y")],
+	after= xy_centers,
+	before.col= color_scheme[nominate_scores$CenterLabels],
+	after.col= color_scheme
+	)
 
 ##########========== FOOTER
 
