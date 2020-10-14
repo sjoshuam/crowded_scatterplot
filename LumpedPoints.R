@@ -109,8 +109,12 @@ ComparePlots <- function (
 	before, after,
 	tune_size= 1.4,
 	before.col= NULL, after.col= NULL,
-	plot_file= file.path("C_Outputs", "LumpedCluster.pdf")
+	plot_file= file.path("C_Outputs", "LumpedPoints.pdf")
 	) {
+	## Define colors
+	if (is.null(before.col)) {before.col <- "black"}
+	if (is.null(after.col))  { after.col <- "black"}
+	
   #####===== Prepare for rendition
   ## Initialize graphical device 
   pdf( plot_file, width= 10, height= 5)
@@ -181,7 +185,6 @@ nominate_scores$CenterLabels <- attr(xy_centers, "CenterLabels")
 
 ## Generate color scheme
 color_scheme <- ColorScheme( nrow(xy_centers))
-
 
 ## Plot original and clustered plot side by side
 ComparePlots(
