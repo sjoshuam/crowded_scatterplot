@@ -135,7 +135,7 @@ ComparePlots <- function (
   	)
   axis(side= 1, col.ticks= "black", col= "transparent" )
   axis(side= 2, col.ticks= "black", col= "transparent" )
-  title(main= "Original Scatter Plot")
+  title(main= "Lattice-Spaced Scatter Plot")
   
   #####===== Terminate graphical device
   graphics.off()
