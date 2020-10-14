@@ -35,6 +35,8 @@ nominate_scores$Y <- nominate_scores$nominate_dim2
 
 ##########========== CREATE FUNCTIONS
 
+#####===== Generate regular lattices of points, so that scatterplot can be
+  ## conformed to regularly spaced lattice points
 GenerateLattice <- function (xy_coords, point_density= 1/3) {
 	
 	## Determine x-spacing for lattice
@@ -63,16 +65,97 @@ GenerateLattice <- function (xy_coords, point_density= 1/3) {
 	offset <- offset[{{1:length(offset)} %% 2} == 0]
 	offset <- xy_lattice[,"Y"] %in% offset
 	xy_lattice[offset, "X"] <- xy_lattice[offset, "X"] + {x_space / 4}
-	xy_lattice[!offset, "X"] <- xy_lattice[!offset, "X"] - {x_space / 4} 	
+	xy_lattice[!offset, "X"] <- xy_lattice[!offset, "X"] - {x_space / 4}
 	
 	return(xy_lattice)
-  }
+}
 
+Distance <- function (xy1, xy2) {
+	x_dist <- outer(xy1[, 1], xy2[, 1], FUN= "-")^2
+	y_dist <- outer(xy1[, 2], xy2[, 2], FUN= "-")^2
+	xy_dist <- sqrt(x_dist + y_dist)
+	xy_dist
+	}
 
-plot( GenerateLattice(nominate_scores[,c("X", "Y")]) )
+#####===== Assign points to lattice points so that they have regular spacing
 
+SpacedPoints <- function (xy_coords, max_iter= 100) {
+	
+	## generate lattice and calculate distances between points and lattice
+	xy_lattice <- GenerateLattice(xy_coords)
+	dist_matrix <- Distance(xy_coords, xy_lattice)
+	
+	## Iteratively assign points to lattice grid (first iteration)
+	closest_lattice <- apply(dist_matrix, 1, which.min)
+	closest_lattice[duplicated(closest_lattice)] <- NA
+	dist_matrix[ , closest_lattice[!is.na(closest_lattice)]] <- Inf
+	
+	## Iteratively assign points to lattice grid (subsequent iterations)
+	iter <- 0
+	while ( any(is.na(closest_lattice)) & {iter < max_iter} ) {
+		iter <- iter + 1
+		temp_iter <- apply(dist_matrix, 1, which.min)
+		closest_lattice[is.na(closest_lattice)] <- temp_iter[is.na(closest_lattice)]
+	  closest_lattice[duplicated(closest_lattice)] <- NA
+	  dist_matrix[ , closest_lattice[!is.na(closest_lattice)]] <- Inf
+		}
+	
+	## Package outputs
+	xy_lattice <- as.data.frame(xy_lattice[closest_lattice, ])
+	colnames(xy_lattice) <- c("X", "Y")
 
+	return(xy_lattice)
+}
 
-##########========== 
+####==== Render original and clustered plots side-by-side
+
+ComparePlots <- function (
+	before, after,
+	tune_size= 1.4,
+	plot_file= file.path("C_Outputs", "SpacedPoints.pdf")
+	) {
+  #####===== Prepare for rendition
+  ## Initialize graphical device 
+  pdf( plot_file, width= 10, height= 5)
+  par(mfrow= c(1, 2), font= 2)
+  
+  #####===== Render the original scatter plot
+  plot(x= before[, 1:2],
+  	xaxt= "n", yaxt= "n", xlab= "", ylab= "", bty= "n", pch= 16,
+  	xlim= range(before[, 1]), ylim= range(before[, 2])
+  	)
+  axis(side= 1, col.ticks= "black", col= "transparent" )
+  axis(side= 2, col.ticks= "black", col= "transparent" )
+  title(main= "Original Scatter Plot")
+  
+  #####===== Render the re-spaced scatter plot
+  plot(x= after[, 1:2],
+  	xaxt= "n", yaxt= "n", xlab= "", ylab= "", bty= "n", pch= 16,
+  	xlim= range(before[, 1]), ylim= range(before[, 2])
+  	)
+  axis(side= 1, col.ticks= "black", col= "transparent" )
+  axis(side= 2, col.ticks= "black", col= "transparent" )
+  title(main= "Original Scatter Plot")
+  
+  #####===== Terminate graphical device
+  graphics.off()
+
+}
+
+##########========== DEMONSTRATION FUNCTION
+
+## Generate data
+xy_spaced <- SpacedPoints(nominate_scores[, c("X", "Y")])
+
+## Plot original and spaced plot side by side
+ComparePlots(
+	before= nominate_scores[, c("X", "Y")],
+	after= xy_spaced
+	)
+
+##########========== FOOTER
+
+## Run time
+Sys.time() - options()$startTime
 
 ##########==========##########==========##########==========##########==========
