@@ -175,7 +175,7 @@ sum(population$population / 10^6) #7.725
 population <- rename(population, c(lon = INTPTLON, lat = INTPTLAT))
 
 ## generate scatterplot format dataset
-pop_points <- round(population$population / 5000)
+pop_points <- round(population$population / 2000)
 pop_points <- rep(population$full_fips, pop_points) %>%
   tibble() %>%
   rename("full_fips" = 1) %>%
