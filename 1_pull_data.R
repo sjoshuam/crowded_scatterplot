@@ -180,7 +180,6 @@ pop_points <- rep(population$full_fips, pop_points) %>%
   tibble() %>%
   rename("full_fips" = 1) %>%
   left_join(select(population, full_fips, lon, lat), by = "full_fips")
-  
 
 ## SAVE DATA OBJECTS ===========================================================
 

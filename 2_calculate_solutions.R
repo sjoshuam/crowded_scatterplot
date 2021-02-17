@@ -4,7 +4,7 @@
 
 ## meta-information
 ## Author: Joshua M.
-## Creation: 2021-02-07
+## Creation: 2021-02-15 (version 5)
 ## Version: 4.0.3
 ## Description: calculates three solutions to the crowded scatterplot problem -
    ## 1. Cluster - Sum population into a small number of regional dots
@@ -12,11 +12,17 @@
       ## population within a radius of each point
    ## 3. Space out points - Move dots representing a chunk of population so that
       ## they do not occlude each other.
+## Note: For a laptop, this is a big computation. If not running in test_mode,
+   ## it will take 2-3 hours.
 
 ## setup
 remove(list= objects())
-options(scipen = 2, digits = 2, width = 80, start_time = Sys.time(),
-  test_mode = TRUE, start_time = Sys.time(), refresh = TRUE)
+options(scipen = 2, digits = 3, width = 80, start_time = Sys.time(),
+  test_mode = FALSE, start_time = Sys.time(), refresh = TRUE)
+options()$start_time
+
+options(cores = ifelse(options()$test_mode, 0.75, 0.50))
+
 library(sp)
 library(maps)
 library(mapproj)
@@ -28,28 +34,178 @@ library(parallel)
 population <- readRDS("B_Intermediates/population.RData")
 pop_points <- readRDS("B_Intermediates/pop_points.RData")
 
-conus_map   <- map_data("state") %>% as_tibble() %>% rename(lon = long)
+conus_map   <- map_data("state") %>%
+  as_tibble() %>%
+  rename(lon = long) %>%
+  mutate(region = str_to_title(region)) %>%
+  mutate(state = state.abb[match(region, state.name)])
 
 ## TEST MODE ===================================================================
 
 if (options()$test_mode) {
-
-population <- slice_sample(population, n = min(nrow(population), 2 * 10^4))
-pop_points <- slice_sample(pop_points, n = min(nrow(pop_points), 2 * 10^4))
-conus_map <- filter(conus_map,
-  !(region %in% c(
-    "florida", "texas", "louisiana", "rhode island",
-    "washington", "idaho", "montana", "north dakota", "minneapolis", 
-    "maine", "new hampshire", "vermont", "massachusetts", "connecticut"
-    ))
-  )
+  
+  ## define test states
+  big_states <- c(
+    "TX", "CA",
+    "MT", "NM", "AZ", "NV", "CO",
+    "FL", "NY", "PA", "IL", "OH"
+    )
+  if (TRUE) {
+    big_states <- c(big_states,
+      "WY", "OR", "ID", "UT", "KS", "MN", "NE",
+      "GA", "NC", "MI", "NJ", "VA", "WA", "AZ", "MA"
+      )
+  }
+  names(big_states) <- state.name[state.abb %in% big_states]
+  
+  ## filter data to test states
+  conus_map <- conus_map %>% filter(!(region %in% names(big_states)))
+  population <- population %>% filter(!(state  %in% big_states))
+  pop_points <- pop_points %>% filter(full_fips %in% population$full_fips)
+  remove(big_states)
+  
 }
 
-## PROJECT COORDIANTES =========================================================
+## DECLARE MAP REDUCE FUNCTIONS ================================================
+Sys.time() - options()$start_time
+
+## create directory to hold mapped data objects
+unlink("B_Intermediates/map_lapply", recursive = TRUE)
+dir.create("B_Intermediates/map_lapply")
+
+## declare function to generate mapped data objects
+MapCreate <- function(dest_dir, data_object, cut_vector) {
+  
+  ## refine vector used to divide the dataset into chunks
+  if (is.numeric(cut_vector)) {
+    data_name <- ceiling(log10(max(cut_vector))) + 1
+    cut_vector <- cut_vector + 10^data_name
+    cut_vector <- paste0("Obj", cut_vector)
+  }
+
+  ## split dataset according to cut vector
+  data_object <- as.data.frame(data_object)
+  data_object <- split(x = data_object, f = cut_vector)
+  data_object <- lapply(data_object, as.matrix)
+
+  ## generate data object names
+  dest_dir <- paste0("B_Intermediates/map_lapply/", dest_dir)
+  data_name <- paste0("/", names(data_object), ".RData")
+  data_name <- paste0(dest_dir, data_name)
+
+  ## save to disk
+  dir.create(dest_dir)
+  invisible(mapply(
+    FUN = saveRDS,
+    object = data_object,
+    file = data_name
+    ))
+  
+  }
+
+## declare function to apply functions to data objects
+MapLapply <- function(dest_dir, FUN) {
+  
+  ## create a list of data objects
+  dest_dir <- paste0("B_Intermediates/map_lapply/", dest_dir)
+  dest_dir <- list.files(dest_dir, full.names = TRUE)
+  names(dest_dir) <- str_remove(dest_dir, ".+/")
+  
+  ## create a wrapper for the function
+  FunctionWrapper <- function(dd, f = FUN) {
+    x <- readRDS(dd)
+    x <- f(x)
+    saveRDS(x, file = dd)
+  }
+  function_environment = environment()
+  
+  ## apply function to each data object
+  par_cluster <- makeCluster(floor(detectCores() * options()$cores))
+  clusterExport(cl = par_cluster,
+    varlist = c("FUN", "FunctionWrapper"), envir = function_environment)
+  parLapplyLB(cl = par_cluster, X = dest_dir, fun = FunctionWrapper)
+  stopCluster(par_cluster)
+}
+
+## declare function to retrieve data objects
+MapRetrieve <- function(dest_dir) {
+  
+  ## create a list of data objects
+  dest_dir <- paste0("B_Intermediates/map_lapply/", dest_dir)
+  dest_dir <- list.files(dest_dir, full.names = TRUE)
+  names(dest_dir) <- str_remove(dest_dir, ".+/")
+  
+  ## apply function to each data object
+  par_cluster <- makeCluster(detectCores() - 2)
+  the_result <- parLapplyLB(cl = par_cluster, X = dest_dir, fun = readRDS)
+  stopCluster(par_cluster)
+  
+  ## express results
+  return(the_result)
+}
+
+## declare function to duplicate map object
+MapDuplicate <- function(dest_dir, new_dir) {
+  dest_dir <- paste0("B_Intermediates/map_lapply/", dest_dir)
+  dir.create(paste0("B_Intermediates/map_lapply/", new_dir))
+  new_dir <- paste0("B_Intermediates/map_lapply/", new_dir)
+  dest_dir <- list.files(dest_dir, full.names = TRUE)
+  invisible(file.copy(from = dest_dir, to = new_dir, recursive = TRUE))
+}
+
+## declare function to bundle objects in a list
+MapBundle <- function(read_dir1, read_dir2, write_dir) {
+  
+  unlink(paste0("B_Intermediates/map_lapply/", write_dir), recursive = TRUE)
+  dir.create(paste0("B_Intermediates/map_lapply/", write_dir))
+  
+  ## generate file roster
+  output_files <- data.frame(
+    "Input_1" = list.files(paste0("B_Intermediates/map_lapply/", read_dir1),
+      full.names = TRUE),
+    "Input_2" = list.files(paste0("B_Intermediates/map_lapply/", read_dir2),
+      full.names = TRUE),
+    "Output" = list.files(paste0("B_Intermediates/map_lapply/", read_dir2),
+      full.names = TRUE)
+    )
+  names(output_files)[1:2] <- c(read_dir1, read_dir2)
+  output_files$Output <- gsub(
+    pattern = read_dir2,
+    replacement = write_dir,
+    x = output_files$Output
+    )
+  
+  output_files <- split(output_files, seq(nrow(output_files)))
+  output_files <- lapply(output_files, unlist)
+  
+  ## function to read in a package of objects, packaged as a list
+  ReadPair <- function(x) {
+    y <- x[3]
+    x <- x[-3]
+    z <- tapply(x, names(x), readRDS)
+    z <- z[names(x)[1:2]]
+    saveRDS(z, file = y)
+    }
+  
+  ## read in objects
+  parallel_cluster <- makeCluster(detectCores() - 2)
+  function_environment <- environment()
+  output_files <- parLapplyLB(
+    cl = parallel_cluster,
+    X = output_files,
+    fun = ReadPair
+    )
+  stopCluster(parallel_cluster)
+  
+}
+
+
+## PROJECT GEOGRAPHIC COORDIANTES ==============================================
+Sys.time() - options()$start_time
 
 ## declare map projection function
 ProjectAlbersConus <- function(x,
-  scale_factors = c(x_min = -0.33, y_min = -1.52, scale = 0.71)
+  scale_factors = c(x_min = -0.332, y_min = -1.528, scale = 0.71)
   ) {
   
   ## project map
@@ -66,10 +222,10 @@ ProjectAlbersConus <- function(x,
       ))
     )
    
-    print("Scale factors:")
-    print(scale_factors)   
+    print("Calculated scale factors:")
+    print(as.character(new_scale_factors))   
     
-  if (is.null(scale_factors)) {
+  if (is.null(new_scale_factors)) {
     scale_factors <- new_scale_factors
     }
   
@@ -90,194 +246,266 @@ population  <- ProjectAlbersConus(population)
 pop_points  <- ProjectAlbersConus(pop_points)
 lon_lat <- c("lon_albers", "lat_albers")
 
-## GENERATE POINT GRIDS ========================================================
+## merge tiny states
+conus_map$state <- recode(conus_map$state,
+    "NH" = "AA", "VT" = "AA", "MA" = "AA", "CT" = "AA", "RI" = "AA",
+    "MD" = "BB", "DE" = "BB", "DC" = "BB", "NJ" = "BB"
+    )
+population$state <- recode(population$state,
+    "NH" = "AA", "VT" = "AA", "MA" = "AA", "CT" = "AA", "RI" = "AA",
+    "MD" = "BB", "DE" = "BB", "DC" = "BB", "NJ" = "BB"
+    )
 
-   ## supports the proximity and spacing solutions
+## GENERATE POINT LATTICES =====================================================
+Sys.time() - options()$start_time
 
-## declare point generation function 
-MakePointGrid <- function(all_polygon, xy_name, group_name,
-  n_points = nrow(pop_points) * 20
-  ) {
-
-  ## calcualte key polygon measures
-  point_range  <- all_polygon %>%
-    select(all_of(xy_name)) %>%
-    rename(x = 1, y = 2) %>%
-    summarize(
-      xmax = max(x),
-      xmin = min(x),
-      ymax = max(y),
-      ymin = min(y),
-      xspace = (max(x) - min(x)) / sqrt(n_points),
-      yspace = (max(y) - min(y)) / sqrt(n_points)
-      ) %>%
-    mutate("space" = max(xspace, yspace)) %>%
-    as.list()
-
-  ## generate point grid
-  point_grid <- expand.grid(
-    x = seq(
-      to = point_range$xmax,
-      from = point_range$xmin,
-      by = point_range$space
-      ),
-    y = seq(
-      to = point_range$ymax,
-      from = point_range$ymin,
-      by = point_range$space
+MakeLattice <- function(polygon_xyg) {
+  
+  ## declare point in polygon wrapper function
+  PointInPolygon <- function(pol, pnt) {
+    sp::point.in.polygon(
+      point.x = pnt[, 1],
+      point.y = pnt[, 2],
+      pol.x = pol[, 1],
+      pol.y = pol[, 2]
       )
+    }
+  
+  ## make rectangular lattice
+  point_lattice <- expand.grid(
+    seq(from = min(polygon_xyg[, 1]), to = max(polygon_xyg[, 1]),
+      by = 0.00035 * 2),
+    seq(from = min(polygon_xyg[, 2]), to = max(polygon_xyg[, 2]),
+      by = 0.00035 * 2),
+    stringsAsFactors = FALSE
     )
+  colnames(point_lattice) <- colnames(polygon_xyg)[1:2]
 
-  
-  ## detect points outside each polygons
-  PointInPolygon <- function(polygon_xy, point_xy) {
-    y <- sp::point.in.polygon(
-      point.x = point_xy[, 1],
-      point.y = point_xy[, 2],
-      pol.x = polygon_xy[, 1],
-      pol.y = polygon_xy[, 2]
-      )
-    as.logical(y)
-  }
-  
-  in_polygon <- split(
-    x = all_polygon[, xy_name],
-    f= all_polygon[[group_name]]
-    )
-  par_cluster <- makeCluster(floor(detectCores() * 0.8))
-  in_polygon <- parLapply(
-    cl = par_cluster,
-    X = in_polygon,
-    fun = PointInPolygon,
-    point_xy = point_grid
-    )
-  stopCluster(par_cluster)
-  
-  ## exclude points outside all polygons
-  in_polygon <- simplify2array(in_polygon)
-  in_polygon <- apply(in_polygon, 1, any)
-  point_gird <- point_grid[in_polygon, ]
+  ## offset each other row
+  i <- sort(unique(point_lattice[, 2]))
+  i <- i[c(T, F)]
+  i <- point_lattice[, 2] %in% i
+  point_lattice[i, 1] <- point_lattice[i, 1] - 0.00035 * 1
 
-  ## express results
-  tibble(point_gird)
+  ## determine which lattice points are within a polygon
+  polygon_xyg <- split(
+    as.data.frame(polygon_xyg[, 1:2]),
+    polygon_xyg[, 3]
+    )
+  polygon_xyg <- lapply(polygon_xyg, as.matrix)
+  polygon_xyg <- mapply(
+    FUN = PointInPolygon,
+    pol = polygon_xyg,
+    pnt = list(point_lattice)
+    )
+  polygon_xyg <- as.logical(rowSums(polygon_xyg))
+
+  ## filter grid points to those within polygon and express
+  point_lattice <- point_lattice[polygon_xyg, ]
+  return(point_lattice)
 }
 
 ## execute function
-projected_grid <- MakePointGrid(all_polygon = conus_map,
-  xy_name = lon_lat, group_name = "group")
-
-remove(MakePointGrid)
+MapCreate("grid",
+  as.matrix(conus_map[, c("lon_albers", "lat_albers", "group")]),
+  conus_map$state)
+MapLapply("grid", MakeLattice)
 
 ## CALCULATE DISTANCE BETWEEN POINTS AND GRID ==================================
+Sys.time() - options()$start_time
 
-## declare distance calculation function
-DetectProximity <- function(xy1_indexed, xy2, max_dist = 0.00035 * 200) {
+## declare function to calculate distance between points and grid
+CalculateProximity <- function(xy) {
+  
+  ## calculate distance
+  d <- outer(xy[[1]][, 1], xy[[2]][, 1], FUN = "-")^2
+  d <- d + outer(xy[[1]][, 2], xy[[2]][, 2], FUN = "-")^2
+  d <- sqrt(d)
+  dimnames(d) <- list(rownames(xy[[1]]), rownames(xy[[2]]))
+  print(dim(d))
+  
+  ## limit distances to proximity
+  d <- data.frame(
+    expand.grid(rownames(d), colnames(d), stringsAsFactors = FALSE),
+    as.vector(d)
+  )
+  colnames(d) <- c("row", "col", "dist")
+  d <- d[d[, 3] < 0.00035 * 200, ]
+  d <- d[order(d[, 3]), ]
+  d[, 3] <- round(d[, 3], 4)
+  return(d)
+  }
 
-  xy1 <- xy1_indexed[, 1:2]
-  xy1_index <- xy1_indexed[, 3]
-  remove(xy1_indexed)
+## split population object into chunks; package with grid chunks
+population_matrix <- population %>%
+  as.data.frame() %>%
+  magrittr::set_rownames(population$full_fips) %>%
+  select(lon_albers, lat_albers, state)
 
-  ## calculate distance matrix
-  distance_matrix <- outer(xy1[, 1], xy2[, 1], FUN = "-")
-  y_distance <- outer(xy1[, 2], xy2[, 2], FUN = "-")
-  distance_matrix <- distance_matrix^2
-  y_distance <- y_distance^2
-  distance_matrix <- distance_matrix + y_distance
-  distance_matrix <- sqrt(distance_matrix)
-  remove(y_distance, xy2, xy1)
+MapCreate(
+  "population",
+  as.matrix(population_matrix[, c("lon_albers", "lat_albers")]),
+  population_matrix[, "state"]
+  )
+MapBundle("population", "grid", "population_distance")
 
-  ## reshape matrix to long format
-  proximity_list <- data.frame(
-    expand.grid(xy1_index, seq(ncol(distance_matrix))),
-    round(as.vector(distance_matrix), 3)
-    )
-  colnames(proximity_list) <- c("row", "col", "dist")
-  remove(distance_matrix)
+remove(population_matrix)
 
-  ## exclude long distances and express
-  proximity_list <- proximity_list[proximity_list$dist <= max_dist, ]
-  proximity_list <- proximity_list[order(proximity_list$dist), ]
-  return(proximity_list)
+## split pop_points into chunks; package with grid chunks
+population_matrix <- pop_points %>%
+  as.data.frame() %>%
+  left_join(population[, c("full_fips", "state")]) %>%
+  magrittr::set_rownames(paste0("p", seq(nrow(pop_points)))) %>%
+  select(lon_albers, lat_albers, state)
+
+MapCreate(
+  "pop_points",
+  as.matrix(population_matrix[, c("lon_albers", "lat_albers")]),
+  population_matrix[, "state"]
+  )
+MapBundle("pop_points", "grid", "pop_points_distance")
+
+remove(population_matrix)
+
+## calculate distance between each population/pop_points and grid chunk pair
+MapLapply("population_distance", CalculateProximity)
+MapLapply("pop_points_distance", CalculateProximity)
+
+## CALCULATE PROXIMITY SOLUTION ================================================
+Sys.time() - options()$start_time
+
+## declare function to find points within a radius of a grid point
+FindPointsInRadius <- function(x){
+  x[[2]] <- x[[2]][x[[2]][, 3] <= 0.00035 * 25, ]
+  x[[2]] <- tapply(x[[2]][, 1], x[[2]][, 2], unique)
+  x[[2]] <- x[[2]][rownames(x[[1]])]
+  x[[1]]$points <- x[[2]]
+  x <- x[[1]][!sapply(x[[1]]$points, is.null), ]
+  return(x)
 }
 
-## calculate distance
-CalculateDistanceInParallel <- function(xy1, xy2, DistFunc) {
-  
-  ## generate index for the matrix that will be split into parallel chunks
-  xy1 <- data.frame(xy1, "index" = seq(nrow(xy1)))
-  
-  ## split into chunks
-  cut_vector <- seq(nrow(xy1))
-  cut_vector <- cut(cut_vector,
-    breaks = max(
-      floor(detectCores() * 0.5),
-      floor(length(cut_vector) / 400)
-      )
-    )
-  cut_vector <- as.numeric(cut_vector)
-  xy1 <-  split(xy1, f = cut_vector)
+## find closest grid point to each population point
+MapBundle("grid", "population_distance", "proximity_solution")
+MapLapply("proximity_solution", FindPointsInRadius)
 
-  ## execution function on each chunk
-  parallel_cluster <- makeCluster(floor(detectCores() * 0.8))
-  the_results <- parLapply(
+## retrieve and unpack distributed calculations
+proximity_solution <- MapRetrieve("proximity_solution")
+proximity_solution <- do.call(what = "rbind", args = proximity_solution)
+
+## sum population at each point
+population <- readRDS("B_Intermediates/population.RData")
+population <- setNames(population$population, population$full_fips)
+
+SumPopulation <- function(pop_names, pop = population) {
+  sum(pop[names(pop) %in% pop_names])
+}
+
+parallel_cluster <- makeCluster(detectCores() * options()$cores)
+proximity_solution$points <- parSapply(
     cl = parallel_cluster,
-    X = xy1,
-    fun = DistFunc,
-    xy2 = xy2
+    X = proximity_solution$points,
+    FUN = SumPopulation,
+    pop = population
     )
-  stopCluster(parallel_cluster)
+stopCluster(parallel_cluster)
+
+## save results and clean up objects that are no longer needed
+saveRDS(proximity_solution, file = "B_Intermediates/proximity_solution.RData")
+remove(population, proximity_solution)
+unlink("B_Intermediates/map_lapply/proximity_solution", recursive = TRUE)
+unlink("B_Intermediates/map_lapply/population_distance", recursive = TRUE)
+
+## CALCULATE SPACING SOLUTION ==================================================
+Sys.time() - options()$start_time
+
+## declare function to find unique grid-point pairs
+FindUniqueGridPointPairs <- function(x){
   
-  ## compile results and express result
-  remove(xy2, xy1)
-  gc()
-  the_results <- do.call(what = rbind, args = the_results)
-  rownames(the_results) <- NULL
-  return(the_results)
+  ## add some randomness to the distance sorting order
+  x[[2]] <- x[[2]][sample(nrow(x[[2]])), ]
+  x[[2]] <- x[[2]][order(x[[2]][, 3]), ]
+  the_distance <- x[[2]]
+  x[[2]] <- NULL
+  x <- x[[1]]
+
+  ## filter distance grid
+  result_basket <- vector(mode = "list")
+  iter <- 0
+
+  while (nrow(the_distance) > 0) {
+    iter <- iter + 1
+    i <- !duplicated(the_distance[, 1])
+    i <- i & !duplicated(the_distance[, 2])
+    result_basket[[iter]] <- the_distance[i, ]
+    i <- the_distance[, 1] %in% result_basket[[iter]][, 1]
+    i <- i | (the_distance[, 2] %in% result_basket[[iter]][, 2])
+    the_distance <- the_distance[!i, ]
+    if (iter > 200) break
+  }
+
+  result_basket <- do.call(what = rbind, args = result_basket)
+  x <- x[match(result_basket[, 2], rownames(x)), ]
+  result_basket <- cbind(result_basket, x)
+  return(result_basket)
 }
 
-population_distance <- CalculateDistanceInParallel(
-  xy1 = projected_grid[, c("x", "y")],
-  xy2 = population[, lon_lat],
-  DistFunc = DetectProximity
-  )
-saveRDS(population_distance, file = "B_Intermediates/population_distance.RData")
-remove(population_distance)
+# ## find with grid points were already pop_points
+# FindGridedPopPoints <- function(x) {
+#   x[x[, 3] < 0.00035 * 2, 2]
+# }
+# 
+# MapDuplicate("pop_points_distance", "already_on_grid")
+# MapLapply("already_on_grid", FindGridedPopPoints)
 
-pop_point_distance <- CalculateDistanceInParallel(
-  xy1 = projected_grid[, c("x", "y")],
-  xy2 = pop_points[, lon_lat],
-  DistFunc = DetectProximity
-  )
+## find unique grid-point pairs
+MapBundle("grid", "pop_points_distance", "spacing_solution")
+MapLapply("spacing_solution", FindUniqueGridPointPairs) ##!!!
 
-## save objects to free up RAM
-saveRDS(pop_point_distance, file = "B_Intermediates/pop_point_distance.RData")
-remove(pop_point_distance)
+## retrieve and unpack distributed calculations
+spacing_solution <- MapRetrieve("spacing_solution")
+spacing_solution <- do.call(what = "rbind", args = spacing_solution)
 
-saveRDS(projected_grid, file = "B_Intermediates/projected_grid.RData")
-remove(projected_grid)
+# ## retrieve "already a pop_point" variables and incorporate
+# already_on_grid <- MapRetrieve("already_on_grid")
+# already_on_grid <- unlist(already_on_grid, use.names = FALSE)
+# spacing_solution <- spacing_solution %>%
+#   mutate(already_on_grid = col %in% already_on_grid)
+
+## save results and clean up objects that are no longer needed
+saveRDS(spacing_solution, file = "B_Intermediates/spacing_solution.RData")
+remove(pop_points, spacing_solution)
+unlink("B_Intermediates/map_lapply/spacing_solution", recursive = TRUE)
+unlink("B_Intermediates/map_lapply/pop_points_distance", recursive = TRUE)
 
 ## CALCULATE KMEANS SOLUTION ===================================================
+Sys.time() - options()$start_time
+
+## read in data
+population <- readRDS("B_Intermediates/population.RData")
+population  <- ProjectAlbersConus(population)
 
 ## calculate kmeans clusters
 population$kmeans_solution <- kmeans(
   x = as.matrix(population[, lon_lat]),
-  centers = 10^4
+  centers = 10^4,
+  iter.max = 10^3
   )$cluster
 cluster_solution <- population %>%
   group_by(kmeans_solution) %>%
   summarize(
-    lon_albers = median(lon_albers),
-    lat_albers = median(lat_albers),
-    population = sum(population)
-    )
+    lon_albers = sum(lon_albers * population),
+    lat_albers = sum(lat_albers * population),
+    population = sum(population),
+    full_fips = list(full_fips)
+    ) %>%
+  mutate(
+    lon_albers = lon_albers / pmax(population, 1),
+    lat_albers = lat_albers / pmax(population, 1)
+    ) 
 
 ## simplify further by proximity
-cluster_solution$cluster_solution <- sp::spDists(
-  x = as.matrix(cluster_solution[, lon_lat]),
-  y = as.matrix(cluster_solution[, lon_lat]),
-  longlat = FALSE
-  ) %>%
-  as.dist() %>%
+cluster_solution$cluster_solution <- dist(
+  as.matrix(cluster_solution[, lon_lat])) %>%
   hclust() %>%
   cutree(h = 0.00035 * 200)
 population <- left_join(
@@ -289,107 +517,51 @@ population <- left_join(
 cluster_solution <- population %>%
   group_by(cluster_solution) %>%
   summarize(
-    "lon_albers" = median(lon_albers),
-    "lat_albers" = median(lat_albers),
-    "population" = sum(population)
+    lon_albers = sum(lon_albers * population),
+    lat_albers = sum(lat_albers * population),
+    population = sum(population),
+    full_fips = list(full_fips)
+    ) %>%
+  mutate(
+    lon_albers = lon_albers / pmax(population, 1),
+    lat_albers = lat_albers / pmax(population, 1)
     ) %>%
   select(-cluster_solution)
 
-## CALCULATE SPACING SOLUTION ==================================================
+## clean up environment
+saveRDS(cluster_solution, file = "B_Intermediates/cluster_solution.RData")
+remove(population, cluster_solution)
 
-## load pop_point distance object
-pop_point_distance <- readRDS("B_Intermediates/pop_point_distance.RData")
-pop_point_distance <- pop_point_distance[sample(nrow(pop_point_distance)), ]
-pop_point_distance <- pop_point_distance[order(pop_point_distance$dist), ]
+## VISUALLLY INSPECT RESULTS ===================================================
 
-## assign pop_points points to unique grid points
-spacing_solution <- vector(mode = "list")
-iter <- 0
+if (TRUE) {
+  
+pdf("~/Desktop/VisualInspection.pdf")
+  
+cluster_solution <- readRDS("B_Intermediates/cluster_solution.RData")
+plot(cluster_solution[, 1:2], pch= 16, asp = 1,
+  cex = 4 * cluster_solution$population / max(cluster_solution$population),
+  main = "Clusters"
+  )
+points(cluster_solution[, 1:2], pch= 1, asp = 1, col= "red", lwd = 0.5,
+  cex = 4 * cluster_solution$population / max(cluster_solution$population),
+  main = "Clusters"
+  )
+  
+proximity_solution <- readRDS("B_Intermediates/proximity_solution.RData")
+plot(proximity_solution[, 1:2], pch= 16, asp = 1,
+  cex = proximity_solution[, 3] / max(proximity_solution[,3]),
+  main = "Proximity"
+  )
 
-while (nrow(pop_point_distance) > 0) {
-  iter <- iter + 1
-  
-  ## find unique grid-pop_point pairs
-  i <- !duplicated(pop_point_distance$row) & !duplicated(pop_point_distance$col)
-  spacing_solution[[iter]] <- pop_point_distance[i, ]
-  
-  ## exclude rows/columns that have been paired
-  i <- pop_point_distance$row %in% spacing_solution[[iter]]$row
-  i <- i | (pop_point_distance$col %in% spacing_solution[[iter]]$col)
-  pop_point_distance <- pop_point_distance[!i, ]
-  
-  if(iter > 10^3) break
-  if (((iter %% 10) == 0) | (iter < 10)) {
-    print(paste("Records remaining: ", nrow(pop_point_distance)))
-  }
+spacing_solution <- readRDS("B_Intermediates/spacing_solution.RData")
+plot(spacing_solution[, 4:5], pch= 16, cex = 0.1, asp = 1,
+  main = "Spacing"
+  )
+
+graphics.off()
+
 }
-
-spacing_solution <- do.call(what = rbind, args = spacing_solution) %>%
-  as_tibble()
-rownames(spacing_solution) <- NULL
-
-remove(iter, i)
-
-## prepare point grid object
-projected_grid <- readRDS("B_Intermediates/projected_grid.RData")
-colnames(projected_grid) <- c("x_grid", "y_grid")
-projected_grid$row <- seq(nrow(projected_grid))
-
-## incorporate coordinates into pop_points object
-pop_points$col <- seq(nrow(pop_points))
-pop_points <- pop_points %>%
-  left_join(
-    select(spacing_solution, row, col),
-    by = "col"
-    ) %>%
-  left_join(
-    projected_grid,
-    by = "row"
-    )
-
-remove(projected_grid)
-
-## generate a solution object
-spacing_solution <- pop_points %>%
-  select(x_grid, y_grid, full_fips) %>%
-  rename(lon_albers = x_grid, lat_albers = y_grid)
-
-## CALCULATE PROXIMITY SOLUTION ================================================
-
-## load relevant data
-projected_grid <- readRDS("B_Intermediates/projected_grid.RData")
-projected_grid$row <- seq(nrow(projected_grid))
-population_distance <- readRDS("B_Intermediates/population_distance.RData")
-population$col <- seq(nrow(population))
-
-## find closest grid point for each population point
-population_distance <- population_distance %>%
-  arrange(dist) %>%
-  as_tibble() %>%
-  filter(dist < 0.00035 * 50) %>%
-  left_join(select(population, col, population), by = "col") %>%
-  group_by(row) %>%
-  summarize("population" = sum(population))
-
-proximity_solution <- projected_grid %>%
-  left_join(select(population_distance, row, population), by = "row") %>%
-  filter(!is.na(population)) %>%
-  rename("lon_albers" = 1, "lat_albers" = 2) %>%
-  select(lon_albers, lat_albers, population)
-
-## EXPORT SOLUTIONS ============================================================
-
-## export solutions
-save(cluster_solution, file = "B_Intermediates/cluster_solution.RData")
-save(proximity_solution, file = "B_Intermediates/proximity_solution.RData")
-save(spacing_solution, file = "B_Intermediates/spacing_solution.RData")
-
-## delete intermediate objects
-file.remove("B_Intermediates/projected_grid.RData")
-file.remove("B_Intermediates/population_distance.RData")
-file.remove("B_Intermediates/pop_point_distance.RData")
-
-## FOOTER ======================================================================
-Sys.time() - options()$start_time
-
+  
 ##########==========##########==========##########==========##########==========
+Sys.time() - options()$start_time
