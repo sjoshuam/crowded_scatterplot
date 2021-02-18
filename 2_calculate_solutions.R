@@ -199,7 +199,6 @@ MapBundle <- function(read_dir1, read_dir2, write_dir) {
   
 }
 
-
 ## PROJECT GEOGRAPHIC COORDIANTES ==============================================
 Sys.time() - options()$start_time
 
