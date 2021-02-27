@@ -43,7 +43,7 @@ CircleMath <- function(num, full_circle = 12) {
   num <- num - (full_circle * too_much)
   return(num)
   }
-hue_point <- 3#sample(0:11, 1)
+hue_point <- 4 #sample(0:11, 1)
 standard_color <- list(
   # "background_dark"  = hsv(h = CircleMath(hue_point + 6) / 12, s = 0.7, v= 0.3),
   # "background_mid"   = hsv(h = CircleMath(hue_point + 6) / 12, s = 0.5, v= 0.5),
@@ -51,9 +51,12 @@ standard_color <- list(
   "background_dark"  = hsv(h = 0, s = 0, v= 0.0),
   "background_mid"   = hsv(h = 0, s = 0, v= 0.5),
   "background_light" = hsv(h = 0, s = 0, v= 1.0),
-  "foreground_dark"  = hsv(h = hue_point / 12, s = 0.7, v= 0.3),
-  "foreground_mid"   = hsv(h = hue_point / 12, s = 0.5, v= 0.5),
-  "foreground_light" = hsv(h = hue_point / 12, s = 0.1, v= 0.9)
+  "midground_dark"   = hsv(h = 06 / 12, s = 0.7, v= 0.3),
+  "midground_mid"    = hsv(h = 06 / 12, s = 0.5, v= 0.5),
+  "midground_light"  = hsv(h = 06 / 12, s = 0.1, v= 0.9),
+  "foreground_dark"  = hsv(h = 08 / 12, s = 0.7, v= 0.3),
+  "foreground_mid"   = hsv(h = 08 / 12, s = 0.5, v= 0.5),
+  "foreground_light" = hsv(h = 08 / 12, s = 0.1, v= 0.9)
 )
 
 ## initialize plot
@@ -132,13 +135,13 @@ crowded_scatterplot <- crowded_scatterplot +
     data = filter(poster_dim, element == "plot_12"),
     mapping = aes(x = (x_min + x_max) / 2, y = y_max - 0.5),
     vjust = 1, size = 7, label = explanation,
-    color = standard_color$foreground_dark, fontface ="bold"
+    color = standard_color$background_dark, fontface ="bold"
   ) + geom_text(
     data = filter(poster_dim, element == "title_12"),
     mapping = aes(x = (x_min + x_max) / 2, y = y_max),
     vjust = 1, size = 12,
     label = "Solutions To The Crowded Scatterplot Problem",
-    color = standard_color$foreground_dark, fontface ="bold"
+    color = standard_color$background_dark, fontface ="bold"
       )
 
 ## project geographic coordinates
@@ -246,7 +249,7 @@ crowded_scatterplot <- crowded_scatterplot +
     x = (poster_dim["title_22", "x_min"] + poster_dim["title_22", "x_max"]) / 2,
     y = (poster_dim["title_22", "y_min"] + poster_dim["title_22", "y_max"]) / 2,
     label = "Geographic Distribution of the US Population",
-    fontface = "bold", size = 12, color = standard_color$foreground_dark,
+    fontface = "bold", size = 12, color = standard_color$background_dark,
     vjust = 0
     )
 
@@ -256,7 +259,7 @@ crowded_scatterplot <- crowded_scatterplot +
     data = PanelMutation(the_data = population, panel = "plot_22"),
     mapping = aes(x = panel_x, y = panel_y),
     size = 0.1,
-    color = standard_color$foreground_dark
+    color = standard_color$midground_mid
     )
 
 ## RENDER RIGHT TOP PANEL (HIDDEN POINTS) ==============================
@@ -267,8 +270,19 @@ crowded_scatterplot <- crowded_scatterplot +
     data = filter(poster_dim, element == "title_32"),
     mapping = aes(x = (x_min + x_max) / 2, y = (y_min + y_max) / 2),
     label = "Hidden Points On Geographic Map",
-    fontface = "bold", size = 12, color = standard_color$foreground_dark,
+    fontface = "bold", size = 12, color = standard_color$background_dark,
     vjust = 0)
+
+## generate hidden points count by state
+hidden_points <- pop_points %>%
+  left_join(select(population, full_fips, state), by = "full_fips") %>%
+  mutate("hidden" = as.numeric(duplicated(full_fips))) %>%
+  group_by(state) %>%
+  summarize(
+    visible = sum(1 - hidden),
+    hidden  = sum(hidden),
+    total = visible + hidden
+    )
 
 warning("TODO: Calculate dot arrangement based on visible/invisible by state")
 
@@ -279,9 +293,28 @@ crowded_scatterplot <- crowded_scatterplot + geom_text(
   data = filter(poster_dim, element == "title_11"),
   mapping = aes(x = (x_min + x_max) / 2, y = (y_min + y_max) / 2),
   label = "Points Lumped Together And Sized Accordingly",
-  fontface = "bold", size = 12, color = standard_color$foreground_dark,
+  fontface = "bold", size = 12, color = standard_color$background_dark,
   vjust = 0
   )
+
+## determine cluster under-layer coloring
+Recycle <- function(x, n) {
+  x <- rep(x, times = ceiling(n / length(x)))
+  x <- x[seq(n)]
+  return(x)
+}
+
+cluster_solution$hue <- Recycle(
+  x = seq(from = 0, to = 11 / 12, by = 1 / 12),
+  n = nrow(cluster_solution)
+  )
+
+cluster_color <- cluster_solution %>%
+  mutate(cluster = seq(nrow(cluster_solution))) %>%
+  unnest(cols = full_fips ) %>%
+  select(cluster, full_fips, hue)
+
+population <- population %>% left_join(cluster_color, by = "full_fips")
 
 ## render population
 cluster_solution <- cluster_solution %>%
@@ -291,15 +324,15 @@ crowded_scatterplot <- crowded_scatterplot +
     data = PanelMutation(the_data = population, panel = "plot_11"),
     mapping = aes(x = panel_x, y = panel_y),
     size = 0.1,
-    color = standard_color$foreground_light
+    color = hsv(h = population$hue, s = 0.1, v = 0.9)
     ) +
   geom_point(
     data = PanelMutation(the_data = cluster_solution, panel = "plot_11"),
     mapping = aes(x = panel_x, y = panel_y
       ),
     size = cluster_solution$size,
-    color = standard_color$foreground_dark,
-    fill = standard_color$foreground_light,
+    color = "transparent",
+    fill = hsv(h = cluster_solution$hue, s = 0.1, v = 0.9),
     pch = 21
     ) +
   geom_point(
@@ -307,13 +340,11 @@ crowded_scatterplot <- crowded_scatterplot +
     mapping = aes(x = panel_x, y = panel_y
       ),
     size = cluster_solution$size,
-    color = standard_color$foreground_dark,
+    color = hsv(h = cluster_solution$hue, s = 0.80, v = 0.40),
     fill = "transparent",
-    pch = 21
+    pch = 21, stroke = 1.5
     ) +
   theme(legend.position = "none")
-
-warning("TODO: Color dots by cluster")
 
 ## RENDER MIDDLE BOTTOM PANEL (PROXIMITY SOLUTION) =============================
 
@@ -321,8 +352,8 @@ warning("TODO: Color dots by cluster")
 crowded_scatterplot <- crowded_scatterplot + geom_text(
   data = filter(poster_dim, element == "title_21"),
   mapping = aes(x = (x_min + x_max) / 2, y = (y_min + y_max) / 2),
-  label = "Dark Points Indicate 1,000,000+ People Nearby",
-  fontface = "bold", size = 12, color = standard_color$foreground_dark,
+  label = "Points Shaded If 1,000,000+ People Nearby",
+  fontface = "bold", size = 12, color = standard_color$background_dark,
   vjust = 0
   )
 
@@ -333,7 +364,7 @@ crowded_scatterplot <- crowded_scatterplot +
     data = PanelMutation(the_data = population, panel = "plot_21"),
     mapping = aes(x = panel_x, y = panel_y),
     size = 0.1,
-    color = standard_color$foreground_mid
+    color = standard_color$midground_mid
     )  +
   geom_point(
     data = PanelMutation(the_data = proximity_solution, panel = "plot_21"),
@@ -349,7 +380,7 @@ crowded_scatterplot <- crowded_scatterplot + geom_text(
   data = filter(poster_dim, element == "title_31"),
   mapping = aes(x = (x_min + x_max) / 2, y = (y_min + y_max) / 2),
   label = "Points Spaced So That All Are Visible",
-  fontface = "bold", size = 12, color = standard_color$foreground_dark,
+  fontface = "bold", size = 12, color = standard_color$background_dark,
   vjust = 0
   )
 
@@ -359,13 +390,13 @@ crowded_scatterplot <- crowded_scatterplot +
     data = PanelMutation(the_data = spacing_solution, panel = "plot_31"),
     mapping = aes(x = panel_x, y = panel_y),
     size = 0.1,
-    color = standard_color$foreground_mid
+    color = standard_color$midground_mid
     ) +
   geom_point(
     data = PanelMutation(the_data = population, panel = "plot_31"),
     mapping = aes(x = panel_x, y = panel_y),
     size = 0.1,
-    color = standard_color$foreground_dark
+    color = standard_color$midground_mid
     )
 
 
