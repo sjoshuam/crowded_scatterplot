@@ -57,10 +57,10 @@ Outputs (in C_Outputs):
 
 This project is still in progress.  I have written code to generate three solutions to the scatterplot problem for the United States population and have completed about half of the poster visualizing the results.  Tasks remaining:
 
-[] Write code to generate the top-right panel, which will depict the visible and obscured points in a geographic depiction of the US population.
+- [ ] Write code to generate the top-right panel, which will depict the visible and obscured points in a geographic depiction of the US population.
 
-[] Write explanatory paragraphs for each of the solutions' poster panels
+- [ ] Write explanatory paragraphs for each of the solutions' poster panels
 
-[] Make sure the poster, README, and gallery text are fully aligned.
+- [ ] Make sure the poster, README, and gallery text are fully aligned.
 
-[] Proof-read and improve the text on the poster, gallery text, and this README file.
+- [ ] Proof-read and improve the text on the poster, gallery text, and this README file.
